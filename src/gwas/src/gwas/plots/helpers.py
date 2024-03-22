@@ -1,6 +1,6 @@
 import pickle
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 import zstandard as zstd
 from scipy.stats.distributions import chi2
@@ -11,12 +11,27 @@ from qmplot import manhattanplot
 
 
 
-def chi2_pvalue(ustat, vstat):
+def chi2_pvalue(ustat: int | float, vstat: int | float) -> float:
+    """Calculates the p-value from U-statistic and V-statistic using the chi-square test.
+    """
     chi2_stat = (ustat ** 2) / vstat
     p_value = chi2.sf(chi2_stat, df=1)
     return p_value
 
-def find_phenotype_index(phenotype_label: str, phenotypes_list: List):
+def find_phenotype_index(phenotype_label: str, phenotypes_list: List) -> Tuple[int, int]:
+    """
+    Finds the indices of the U-statistic and V-statistic for a given phenotype label.
+    Args:
+        phenotype_label (str): The label of the phenotype to find indices for.
+        phenotypes_list (List[str]): A list of phenotype descriptors.
+
+    Returns:
+        Tuple[int, int]: A tuple containing the indices of the U-statistic and V-statistic.
+
+    Raises:
+        ValueError: If either the U-statistic or V-statistic index cannot be found for the
+        specified phenotype label.
+    """
     u_stat_idx = None
     v_stat_idx = None
     # namedTuple für phenotype
