@@ -47,25 +47,27 @@ def create_dataframe_single_chr(args: List[tuple[Path, Path, str]]) -> pd.DataFr
 
     variant_count = len(metadata.index)
 
-    u_stat, v_stat = (
-        b2_array[:, u_stat_idx],
-        b2_array[:, v_stat_idx],
-    )  # possible solution b2_array[:, u_stat_idx:v_stat_idx] to only index array once
+    # u_stat, v_stat = (
+    #     b2_array[:, u_stat_idx],
+    #     b2_array[:, v_stat_idx],
+    # )  # possible solution b2_array[:, u_stat_idx:v_stat_idx] to only index array once
     # p = phenotype_indices(u_stat_idx=u_stat, v_stat_idx=v_stat)
 
-    chr_data = {"SNP": [], "CHR": [], "BP": [], "P": []}
+    stats = b2_array[:, u_stat_idx:v_stat_idx +1] # +1 since slicing range is exclusive
 
-    for i in tqdm(range(variant_count), desc="Processing Variant"):
-        # indices finden für v_stat u_stat idx
-        chrom = metadata.chromosome_int.iloc[i]
-        pos = metadata.position.iloc[i]
+    #chr_data = {"SNP": [], "CHR": [], "BP": [], "P": []}
 
-        p_value = chi2_pvalue(ustat=u_stat[i], vstat=v_stat[i])
+    chrom = metadata.chromosome_int
+    pos = metadata.position
 
-        chr_data["SNP"].append("rs0000000")
-        chr_data["CHR"].append(chrom)
-        chr_data["BP"].append(pos)
-        chr_data["P"].append(p_value)
+    #p_value = chi2_pvalue(ustat=u_stat[i], vstat=v_stat[i])
+    p_values = chi2_pvalue(ustat=stats[:, 0], vstat=stats[:, 1])
+    chr_data = {
+        "SNP": ["rs0000000"] * variant_count,
+        "CHR": chrom,
+        "BP": pos,
+        "P": p_values
+    }
 
     return pd.DataFrame(chr_data)
 

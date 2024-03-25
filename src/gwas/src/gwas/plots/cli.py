@@ -34,12 +34,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
     )
     parser.add_argument(
-        "output_directory",
+        "--output_directory",
         help="Insert path to output directory for dataframes and plots",
         required=True,
     )
     parser.add_argument(
         "--log-level", choices=logging.getLevelNamesMapping().keys(), default="INFO"
+    )
+    parser.add_argument(
+        "--save_df",
+        help="If set the generated dataframe for a phenotype will be saved in the specified output directory. Useful for debugging.",
+        type=bool,
+        default=False,
     )
     parser.add_argument("--num-threads", type=int, default=mp.cpu_count())
     args = parser.parse_args()
@@ -74,9 +80,14 @@ def main():
             label=label,
             cpu_count=args.num_threads,
         )
-        save_dataframe_as_pickle(
-            dataframe=cur_df, directory=output_directory, label=label
-        )
+        if args.save_df:
+            folder_name = "integramoods_gwas_dfs"
+            folder_path = output_directory / folder_name
+            folder_path.mkdir(parents=True, exist_ok=True)
+
+            filename = f"integramoods_gwas_{label}_df.pkl"
+            file_path = folder_path / filename
+            cur_df.to_pickle(path=file_path)
 
         generate_and_save_manhattan_plot(
             dataframe=cur_df, directory=output_directory, label=label

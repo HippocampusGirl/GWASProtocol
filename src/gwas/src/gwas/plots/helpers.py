@@ -9,6 +9,8 @@ import zstandard as zstd
 from qmplot import manhattanplot
 from scipy.stats.distributions import chi2
 
+from gwas.compression.pipe import CompressedBytesReader
+
 
 def chi2_pvalue(ustat: int | float, vstat: int | float) -> float:
     """Calculates the p-value from U-statistic and V-statistic using the chi-square test."""
@@ -34,6 +36,7 @@ def find_phenotype_index(phenotype_label: str, phenotypes_list: List) -> Tuple[i
     u_stat_idx = None
     v_stat_idx = None
     # namedTuple für phenotype
+    # to use phenotypes_list.index() method we need to build the complete string from the correct label using our included file-name.txt
     for index, phenotype in enumerate(phenotypes_list):
         if phenotype_label in phenotype:
             if "stat-u" in phenotype:
@@ -50,7 +53,8 @@ def find_phenotype_index(phenotype_label: str, phenotypes_list: List) -> Tuple[i
 
 
 def load_metadata(metadata_path: Path):
-    with open(metadata_path, "rb") as f:
+    #with open(metadata_path, "rb") as f:
+    with CompressedBytesReader(metadata_path) as f:
         decompressor = zstd.ZstdDecompressor()
         compressed_data = f.read()
         # decompressed_data = decompressor.decompress(compressed_data)
