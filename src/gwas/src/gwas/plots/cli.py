@@ -10,7 +10,6 @@ from gwas.plots.helpers import (
     check_existing_files,
     filter_rois,
     generate_and_save_manhattan_plot,
-    save_dataframe_as_pickle,
 )
 from gwas.plots.worker import create_dataframe_all_chr
 

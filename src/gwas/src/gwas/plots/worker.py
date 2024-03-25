@@ -5,7 +5,6 @@ from typing import List
 
 import blosc2
 import pandas as pd
-from tqdm import tqdm
 
 from gwas.plots.helpers import chi2_pvalue, find_phenotype_index, load_metadata
 
@@ -53,20 +52,22 @@ def create_dataframe_single_chr(args: List[tuple[Path, Path, str]]) -> pd.DataFr
     # )  # possible solution b2_array[:, u_stat_idx:v_stat_idx] to only index array once
     # p = phenotype_indices(u_stat_idx=u_stat, v_stat_idx=v_stat)
 
-    stats = b2_array[:, u_stat_idx:v_stat_idx +1] # +1 since slicing range is exclusive
+    stats = b2_array[
+        :, u_stat_idx : v_stat_idx + 1
+    ]  # +1 since slicing range is exclusive
 
-    #chr_data = {"SNP": [], "CHR": [], "BP": [], "P": []}
+    # chr_data = {"SNP": [], "CHR": [], "BP": [], "P": []}
 
     chrom = metadata.chromosome_int
     pos = metadata.position
 
-    #p_value = chi2_pvalue(ustat=u_stat[i], vstat=v_stat[i])
+    # p_value = chi2_pvalue(ustat=u_stat[i], vstat=v_stat[i])
     p_values = chi2_pvalue(ustat=stats[:, 0], vstat=stats[:, 1])
     chr_data = {
         "SNP": ["rs0000000"] * variant_count,
         "CHR": chrom,
         "BP": pos,
-        "P": p_values
+        "P": p_values,
     }
 
     return pd.DataFrame(chr_data)

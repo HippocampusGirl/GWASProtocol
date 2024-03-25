@@ -53,7 +53,7 @@ def find_phenotype_index(phenotype_label: str, phenotypes_list: List) -> Tuple[i
 
 
 def load_metadata(metadata_path: Path):
-    #with open(metadata_path, "rb") as f:
+    # with open(metadata_path, "rb") as f:
     with CompressedBytesReader(metadata_path) as f:
         decompressor = zstd.ZstdDecompressor()
         compressed_data = f.read()
