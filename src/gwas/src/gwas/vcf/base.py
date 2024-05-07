@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from contextlib import AbstractContextManager
 from enum import Enum, auto
 from functools import partial
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, Literal, Self, overload
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,7 @@ from .variant import Variant
 class Engine(Enum):
     python = auto()
     cpp = auto()
+    cyvcf2 = auto()
 
 
 variant_columns = [
@@ -37,7 +39,183 @@ variant_columns = [
 ]
 
 
-class VCFFile(CompressedTextReader):
+class VCFFile(AbstractContextManager):
+    chromosome: int | str
+
+    vcf_samples: list[str]  # All samples in the file
+    vcf_variants: pd.DataFrame  # All variants in the file
+
+    samples: list[str]  # Samples selected for reading
+
+    sample_indices: npt.NDArray[np.uint32]  # Indices of the samples selected for reading
+    variant_indices: npt.NDArray[np.uint32]  # Variants selected for reading
+
+    minor_allele_frequency_cutoff: float
+    r_squared_cutoff: float
+
+    allele_frequency_columns: list[str]
+
+    def __init__(self) -> None:
+        self.allele_frequency_columns = [
+            "minor_allele_frequency",
+            "alternate_allele_frequency",
+        ]
+
+        self.minor_allele_frequency_cutoff = -np.inf
+        self.r_squared_cutoff = -np.inf
+
+    @abstractmethod
+    def read(
+        self,
+        dosages: npt.NDArray,
+    ) -> None:
+        """
+        Given a target array of the correct shape, read the `DS` field from the file
+        for the samples defined by `sample_indices` and the variants defined by
+        `variant_indices`
+        """
+        ...
+
+    @property
+    def sample_count(self) -> int:
+        """
+        How many samples are selected for reading
+        """
+        return len(self.samples)
+
+    @property
+    def vcf_variant_count(self) -> int:
+        """
+        How many variants are available in the file
+        """
+        return len(self.vcf_variants.index)
+
+    @property
+    def variant_count(self) -> int:
+        """
+        How many variants are selected for reading
+        """
+        return self.variant_indices.size
+
+    @property
+    def variants(self) -> pd.DataFrame:
+        """
+        The metadata for the variants that are selected for reading
+        """
+        return self.vcf_variants.iloc[self.variant_indices, :]
+
+    def reset_variants(self) -> None:
+        """
+        Reset `variant_indices` to read all variants
+        """
+        self.set_variants_from_cutoffs()
+
+    def set_variants_from_cutoffs(
+        self,
+        minor_allele_frequency_cutoff: float = -np.inf,
+        r_squared_cutoff: float = -np.inf,
+    ):
+        """
+        Set `variant_indices` based on supplied cutoffs
+        """
+
+        def greater_or_close(series: pd.Series, cutoff: float) -> npt.NDArray[np.bool_]:
+            value = np.asanyarray(series.values)
+            return (value >= cutoff) | np.isclose(value, cutoff) | np.isnan(value)
+
+        allele_frequency_frame = self.vcf_variants[self.allele_frequency_columns].copy()
+        allele_frequencies = allele_frequency_frame
+        is_major = allele_frequencies > 0.5
+        allele_frequencies[is_major] = 1 - allele_frequencies[is_major]
+        max_allele_frequency = allele_frequencies.max(axis="columns")
+        self.variant_indices = np.flatnonzero(
+            greater_or_close(
+                max_allele_frequency,
+                minor_allele_frequency_cutoff,
+            )
+            & greater_or_close(self.vcf_variants.r_squared, r_squared_cutoff)
+        ).astype(np.uint32)
+
+        logger.debug(
+            f"After filtering with "
+            f'"minor_allele_frequency >= {minor_allele_frequency_cutoff}" and '
+            f'"r_squared >= {r_squared_cutoff}" '
+            f"{self.variant_indices.size} of {self.vcf_variant_count} variants remain."
+        )
+        self.minor_allele_frequency_cutoff = minor_allele_frequency_cutoff
+        self.r_squared_cutoff = r_squared_cutoff
+
+    def set_samples(self, samples: set[str]) -> None:
+        """
+        Set `samples` and `sample_indices` based on list of sample IDs
+        """
+
+        self.sample_indices = np.fromiter(
+            (i for i, sample in enumerate(self.vcf_samples) if sample in samples),
+            dtype=np.uint32,
+        )
+        self.samples = [sample for sample in self.vcf_samples if sample in samples]
+
+    @overload
+    @staticmethod
+    def from_path(
+        file_path: Path | str,
+        samples: set[str] | None = None,
+        engine: Literal[Engine.cpp, Engine.python] = Engine.cpp,
+    ) -> VCFFileReader: ...
+
+    @overload
+    @staticmethod
+    def from_path(
+        file_path: Path | str,
+        samples: set[str] | None = None,
+        engine: Engine = Engine.cyvcf2,
+    ) -> VCFFile: ...
+
+    @staticmethod
+    def from_path(
+        file_path: Path | str,
+        samples: set[str] | None = None,
+        engine: Engine = Engine.cpp,
+    ) -> VCFFile:
+        if engine == Engine.python:
+            from .python import PyVCFFile
+
+            vcf_file: VCFFile = PyVCFFile(file_path)
+        elif engine == Engine.cpp:
+            from .cpp import CppVCFFile
+
+            vcf_file = CppVCFFile(file_path)
+        elif engine == Engine.cyvcf2:
+            from .cyvcf2 import CyVCF2VCFFile
+
+            vcf_file = CyVCF2VCFFile(file_path)
+        else:
+            raise ValueError("Unsupported engine type: {}".format(engine))
+
+        if samples is not None:
+            vcf_file.set_samples(samples)
+
+        return vcf_file
+
+    @staticmethod
+    def make_data_frame(vcf_variants: list[Variant]) -> pd.DataFrame:
+        data_frame = pd.DataFrame(vcf_variants, columns=variant_columns)
+
+        data_frame["position"] = data_frame["position"].astype(np.uint32)
+
+        for column in [
+            "chromosome_int",
+            "reference_allele",
+            "alternate_allele",
+            "format_str",
+        ]:
+            data_frame[column] = data_frame[column].astype("category")
+
+        return data_frame
+
+
+class VCFFileReader(VCFFile, CompressedTextReader):
     mandatory_columns: ClassVar[tuple[str, ...]] = (
         "CHROM",
         "POS",
@@ -69,29 +247,8 @@ class VCFFile(CompressedTextReader):
         dtype=np.uint32,
     )
 
-    chromosome: int | str
-
-    vcf_samples: list[str]
-    samples: list[str]
-    sample_indices: npt.NDArray[np.uint32]
-
-    vcf_variants: pd.DataFrame
-    variant_indices: npt.NDArray[np.uint32]
-    allele_frequency_columns: list[str]
-
-    minor_allele_frequency_cutoff: float
-    r_squared_cutoff: float
-
     def __init__(self, file_path: Path | str) -> None:
-        super().__init__(file_path)
-
-        self.allele_frequency_columns = [
-            "minor_allele_frequency",
-            "alternate_allele_frequency",
-        ]
-
-        self.minor_allele_frequency_cutoff = -np.inf
-        self.r_squared_cutoff = -np.inf
+        super(CompressedTextReader, self).__init__(file_path)
 
         # Read header information and example line.
         self.header_length: int = 0
@@ -126,71 +283,8 @@ class VCFFile(CompressedTextReader):
         self.vcf_samples: list[str] = self.columns[len(self.mandatory_columns) :]
         self.set_samples(set(self.vcf_samples))
 
-    @property
-    def sample_count(self) -> int:
-        return len(self.samples)
-
-    @property
-    def vcf_variant_count(self) -> int:
-        return len(self.vcf_variants.index)
-
-    @property
-    def variant_count(self) -> int:
-        return self.variant_indices.size
-
-    @property
-    def variants(self) -> pd.DataFrame:
-        return self.vcf_variants.iloc[self.variant_indices, :]
-
-    def reset_variants(self) -> None:
-        self.set_variants_from_cutoffs()
-
-    def set_variants_from_cutoffs(
-        self,
-        minor_allele_frequency_cutoff: float = -np.inf,
-        r_squared_cutoff: float = -np.inf,
-    ):
-        def greater_or_close(series: pd.Series, cutoff: float) -> npt.NDArray[np.bool_]:
-            value = np.asanyarray(series.values)
-            return (value >= cutoff) | np.isclose(value, cutoff) | np.isnan(value)
-
-        allele_frequency_frame = self.vcf_variants[self.allele_frequency_columns].copy()
-        allele_frequencies = allele_frequency_frame
-        is_major = allele_frequencies > 0.5
-        allele_frequencies[is_major] = 1 - allele_frequencies[is_major]
-        max_allele_frequency = allele_frequencies.max(axis="columns")
-        self.variant_indices = np.flatnonzero(
-            greater_or_close(
-                max_allele_frequency,
-                minor_allele_frequency_cutoff,
-            )
-            & greater_or_close(self.vcf_variants.r_squared, r_squared_cutoff)
-        ).astype(np.uint32)
-
-        logger.debug(
-            f"After filtering with "
-            f'"minor_allele_frequency >= {minor_allele_frequency_cutoff}" and '
-            f'"r_squared >= {r_squared_cutoff}" '
-            f"{self.variant_indices.size} of {self.vcf_variant_count} variants remain."
-        )
-        self.minor_allele_frequency_cutoff = minor_allele_frequency_cutoff
-        self.r_squared_cutoff = r_squared_cutoff
-
-    def set_samples(self, samples: set[str]) -> None:
-        self.sample_indices = np.fromiter(
-            (i for i, sample in enumerate(self.vcf_samples) if sample in samples),
-            dtype=np.uint32,
-        )
-        self.samples = [sample for sample in self.vcf_samples if sample in samples]
-
     def save_to_cache(self, cache_path: Path) -> None:
         save_to_cache(cache_path, self.cache_key(self.file_path), self)
-
-    @abstractmethod
-    def read(
-        self,
-        dosages: npt.NDArray,
-    ) -> None: ...
 
     @staticmethod
     def cache_key(vcf_path: Path) -> str:
@@ -199,46 +293,8 @@ class VCFFile(CompressedTextReader):
         return cache_key
 
     @classmethod
-    def load_from_cache(cls, cache_path: Path, vcf_path: Path) -> VCFFile:
+    def load_from_cache(cls, cache_path: Path, vcf_path: Path) -> Self:
         return load_from_cache(cache_path, cls.cache_key(vcf_path))
-
-    @staticmethod
-    def from_path(
-        file_path: Path | str,
-        samples: set[str] | None = None,
-        engine: Engine = Engine.cpp,
-    ) -> VCFFile:
-        if engine == Engine.python:
-            from .python import PyVCFFile
-
-            vcf_file: VCFFile = PyVCFFile(file_path)
-        elif engine == Engine.cpp:
-            from .cpp import CppVCFFile
-
-            vcf_file = CppVCFFile(file_path)
-        else:
-            raise ValueError
-
-        if samples is not None:
-            vcf_file.set_samples(samples)
-
-        return vcf_file
-
-    @staticmethod
-    def make_data_frame(vcf_variants: list[Variant]) -> pd.DataFrame:
-        data_frame = pd.DataFrame(vcf_variants, columns=variant_columns)
-
-        data_frame["position"] = data_frame["position"].astype(np.uint32)
-
-        for column in [
-            "chromosome_int",
-            "reference_allele",
-            "alternate_allele",
-            "format_str",
-        ]:
-            data_frame[column] = data_frame[column].astype("category")
-
-        return data_frame
 
 
 def load_vcf(
@@ -246,12 +302,16 @@ def load_vcf(
     vcf_path: Path,
     engine: Engine = Engine.cpp,
 ) -> VCFFile:
-    vcf_file: VCFFile | None = VCFFile.load_from_cache(cache_path, vcf_path)
+    if engine == Engine.cyvcf2:
+        return VCFFile.from_path(vcf_path, engine=engine)
+    vcf_file: VCFFileReader | None = VCFFileReader.load_from_cache(cache_path, vcf_path)
     if vcf_file is None:
-        vcf_file = VCFFile.from_path(vcf_path, engine=engine)
+        vcf_file = VCFFileReader.from_path(vcf_path, engine=engine)
         vcf_file.save_to_cache(cache_path)
     else:
-        logger.debug(f'Cached VCF file metadata for "{VCFFile.cache_key(vcf_path)}"')
+        logger.debug(
+            f'Cached VCF file metadata for "{VCFFileReader.cache_key(vcf_path)}"'
+        )
     return vcf_file
 
 

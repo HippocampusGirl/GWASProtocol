@@ -9,11 +9,11 @@ import numpy as np
 from numpy import typing as npt
 
 from ..utils import chromosome_from_int
-from .base import VCFFile
+from .base import VCFFileReader
 from .variant import Variant
 
 
-class CppVCFFile(VCFFile):
+class CppVCFFile(VCFFileReader):
     def __init__(self, file_path: Path | str) -> None:
         super().__init__(file_path)
 

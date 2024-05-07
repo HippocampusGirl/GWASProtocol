@@ -7,7 +7,10 @@ import numpy as np
 import pandas as pd
 import pytest
 from gwas.compression.pipe import CompressedTextReader
-from gwas.vcf.base import Engine, Variant, VCFFile
+
+# from gwas.compression.pipe import CompressedTextReader
+# from gwas.vcf.base import Engine, Variant, VCFFile, VCFFileReader
+from gwas.vcf.base import Engine, Variant, VCFFile, VCFFileReader
 from numpy import typing as npt
 from tqdm.auto import tqdm
 
@@ -65,14 +68,16 @@ def numpy_read_result(vcf_path: Path) -> ReadResult:
 
     vcf_variants: list[Variant] = list()
     vcf_dosages = np.zeros(
-        (array.shape[0], array.shape[1] - len(VCFFile.mandatory_columns))
+        (array.shape[0], array.shape[1] - len(VCFFileReader.mandatory_columns))
     )
     for i, row in enumerate(tqdm(array)):
-        variant = Variant.from_metadata_columns(*row[VCFFile.metadata_column_indices])
+        variant = Variant.from_metadata_columns(
+            *row[VCFFileReader.metadata_column_indices]
+        )
         vcf_variants.append(variant)
         genotype_fields = variant.format_str.split(":")
         dosage_field_index = genotype_fields.index("DS")
-        for j, dosage in enumerate(row[len(VCFFile.mandatory_columns) :]):
+        for j, dosage in enumerate(row[len(VCFFileReader.mandatory_columns) :]):
             vcf_dosages[i, j] = float(dosage.split(":")[dosage_field_index])
 
     return ReadResult(VCFFile.make_data_frame(vcf_variants), vcf_dosages)
